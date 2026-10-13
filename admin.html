@@ -6,21 +6,29 @@
 <title>TV Admin</title>
 <style>
 body{font-family:sans-serif;margin:0;padding:16px;background:#111;color:#eee;max-width:600px}
-input,button{font-size:16px;padding:10px;border-radius:8px;border:0;margin:4px 0}
-input{background:#222;color:#eee;width:100%;box-sizing:border-box}
+input,button,select{font-size:16px;padding:10px;border-radius:8px;border:0;margin:4px 0}
+input,select{background:#222;color:#eee;width:100%;box-sizing:border-box}
+input[type=checkbox]{width:auto;margin:0 10px 0 0;transform:scale(1.3)}
 button{background:#2d7ff9;color:#fff}
 button.gray{background:#444}
 button.red{background:#c0392b}
-h2,h3{margin:12px 0 6px}
+button.sm{padding:4px 10px;font-size:13px;margin:0 0 0 8px;text-transform:none;letter-spacing:0}
+h2,h3{margin:14px 0 6px}
 h4{margin:14px 0 4px;color:#9ab;font-size:13px;text-transform:uppercase;letter-spacing:1px}
-.screen{background:#1c1c1c;border-radius:10px;padding:10px;margin:6px 0;border:2px solid transparent}
-.screen.sel{border-color:#2d7ff9}
+.screen{background:#1c1c1c;border-radius:10px;padding:10px;margin:6px 0}
+.screen b{cursor:pointer}
 .card{background:#1c1c1c;border-radius:10px;padding:10px;margin:10px 0}
 .card.off{opacity:.45}
 .thumb{width:100%;max-height:160px;object-fit:contain;background:#000;border-radius:6px}
 .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}
 .row input{width:80px;padding:6px}
 .small{font-size:13px;color:#999}
+.where{margin-top:6px;font-size:14px;color:#9c9}
+.where.warn{color:#e9a23b}
+.picker{background:#222;border-radius:8px;padding:6px 10px;margin:6px 0}
+.chk{display:flex;align-items:center;padding:7px 0}
+.chk.all{font-weight:bold}
+.chk.cat{color:#9ab}
 #status{color:#9c9;margin:8px 0}
 #loginerr{color:#e88}
 .hidden{display:none}
@@ -41,7 +49,7 @@ h4{margin:14px 0 4px;color:#9ab;font-size:13px;text-transform:uppercase;letter-s
   <button class="gray" onclick="logout()">Log out</button>
 
   <h3>Screens</h3>
-  <div class="small">Tap a screen to edit its playlist.</div>
+  <div class="small">Tap a screen name to see what plays on it.</div>
   <div id="screens"></div>
 
   <h4>Add screen</h4>
@@ -50,11 +58,16 @@ h4{margin:14px 0 4px;color:#9ab;font-size:13px;text-transform:uppercase;letter-s
   <datalist id="cats"></datalist>
   <button onclick="addScreen()">Add screen</button>
 
-  <h3 id="ptitle">Playlist</h3>
-  <input id="file" type="file" accept="image/*,video/*">
+  <h3>Upload</h3>
+  <input id="file" type="file" accept="image/*,video/*" multiple>
   <div>Image seconds: <input id="newdur" type="number" value="8" min="1" style="width:80px"></div>
+  <div class="small">Show on:</div>
+  <div id="uppick"></div>
   <button onclick="upload()">Upload</button>
   <div id="status"></div>
+
+  <h3 id="ptitle">Media</h3>
+  <select id="view" onchange="setView(this.value)"></select>
   <div id="list"></div>
 </div>
 
@@ -62,7 +75,7 @@ h4{margin:14px 0 4px;color:#9ab;font-size:13px;text-transform:uppercase;letter-s
 var SUPABASE_URL = 'https://voqbltomtzpvuirtpjdq.supabase.co';
 var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZvcWJsdG9tdHpwdnVpcnRwamRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4ODUwNTQsImV4cCI6MjEwNzQ2MTA1NH0.A6n1OjCKtKC5GSykLLc0J9DMSSO1R1PZ3WgfKTpKj_0';
 var sb = supabase.createClient(SUPABASE_URL, KEY);
-var screens = [], items = [], current = null;
+var screens = [], items = [], view = 'all', editId = null, editPicker = null, upPicker = null;
 
 function $(id){ return document.getElementById(id); }
 function say(t){ $('status').textContent = t; }
@@ -76,7 +89,30 @@ function pathOf(it){
   var p = it.file_url.split('/media/')[1];
   return p ? decodeURIComponent(p) : null;
 }
+function matches(it, s){
+  var t = it.targets || [];
+  return t.indexOf('all') > -1 || t.indexOf('s:' + s.id) > -1 || t.indexOf('c:' + s.category) > -1;
+}
+function sName(id){
+  var s = screens.filter(function(x){ return String(x.id) === String(id); })[0];
+  return s ? s.name : null;
+}
+function catCounts(){
+  var c = {};
+  screens.forEach(function(s){ c[s.category] = (c[s.category] || 0) + 1; });
+  return c;
+}
+function whereText(it){
+  var out = [];
+  (it.targets || []).forEach(function(x){
+    if (x === 'all') out.push('All screens');
+    else if (x.indexOf('c:') === 0) out.push('Category: ' + x.slice(2));
+    else if (x.indexOf('s:') === 0){ var n = sName(x.slice(2)); if (n) out.push(n); }
+  });
+  return out.join(', ');
+}
 
+/* ---------- login ---------- */
 async function init(){
   var r = await sb.auth.getSession();
   show(!!r.data.session);
@@ -87,65 +123,88 @@ function show(on){
   if (on) loadAll();
 }
 async function login(){
-  var r = await sb.auth.signInWithPassword({email:$('email').value, password:$('pass').value});
+  var r = await sb.auth.signInWithPassword({email: $('email').value, password: $('pass').value});
   if (r.error){ $('loginerr').textContent = r.error.message; return; }
   $('loginerr').textContent = '';
   show(true);
 }
 async function logout(){ await sb.auth.signOut(); show(false); }
 
+/* ---------- load ---------- */
 async function loadAll(){
   var s = await sb.from('screens').select('*').order('name');
   if (s.error){ say(s.error.message); return; }
   screens = s.data;
-  var p = await sb.from('playlist').select('*').order('position', {ascending:true});
+  var p = await sb.from('playlist').select('*').order('position', {ascending: true});
   if (p.error){ say(p.error.message); return; }
   items = p.data;
-  var ok = current === 'all' || screens.some(function(x){ return String(x.id) === current; });
-  if (!ok) current = screens.length ? String(screens[0].id) : 'all';
+  var prev = upPicker ? upPicker.get() : [];
+  upPicker = makePicker(prev);
+  $('uppick').innerHTML = '';
+  $('uppick').appendChild(upPicker.el);
   renderScreens();
+  renderFilter();
   renderList();
 }
 
-function count(id){
-  return items.filter(function(i){ return i.screen === id; }).length;
-}
-function nameOf(id){
-  if (id === 'all') return 'Shared (all screens)';
-  var s = screens.filter(function(x){ return String(x.id) === id; })[0];
-  return s ? s.name : '';
+/* ---------- target picker ---------- */
+function makePicker(selected){
+  var box = el('div', {className: 'picker'});
+  var sel = {}, valid = {};
+  (selected || []).forEach(function(t){ sel[t] = true; });
+  function add(label, value, cls){
+    valid[value] = true;
+    var l = el('label', {className: 'chk ' + (cls || '')});
+    var c = el('input', {type: 'checkbox', checked: !!sel[value]});
+    c.onchange = function(){ sel[value] = c.checked; };
+    l.appendChild(c);
+    l.appendChild(document.createTextNode(label));
+    box.appendChild(l);
+  }
+  add('All screens', 'all', 'all');
+  var counts = catCounts();
+  Object.keys(counts).sort().forEach(function(c){
+    add('Category: ' + c + ' (' + counts[c] + ' screens)', 'c:' + c, 'cat');
+  });
+  screens.forEach(function(s){
+    add(s.name + ' (' + s.category + ')', 's:' + s.id);
+  });
+  return {
+    el: box,
+    get: function(){
+      return Object.keys(sel).filter(function(k){ return sel[k] && valid[k]; });
+    }
+  };
 }
 
+/* ---------- screens ---------- */
 function renderScreens(){
   var box = $('screens');
   box.innerHTML = '';
-  var cats = {};
-  screens.forEach(function(s){
-    (cats[s.category] = cats[s.category] || []).push(s);
-  });
-  var names = Object.keys(cats).sort();
+  if (!screens.length) box.textContent = 'No screens yet. Add one below.';
+  var counts = catCounts();
+  var names = Object.keys(counts).sort();
   names.forEach(function(c){
-    box.appendChild(el('h4', {textContent: c}));
-    cats[c].forEach(function(s){ box.appendChild(screenCard(s)); });
+    var h = el('h4', {textContent: c});
+    h.appendChild(btn('Rename category', 'gray sm', function(){ renameCat(c); }));
+    box.appendChild(h);
+    screens.filter(function(s){ return s.category === c; }).forEach(function(s){
+      box.appendChild(screenCard(s));
+    });
   });
-  box.appendChild(el('h4', {textContent: 'Shared'}));
-  var d = el('div', {className: 'screen' + (current === 'all' ? ' sel' : '')});
-  var top = el('div', {textContent: 'Shared - plays on all screens (' + count('all') + ' items)'});
-  top.onclick = function(){ current = 'all'; renderScreens(); renderList(); };
-  d.appendChild(top);
-  box.appendChild(d);
   var dl = $('cats');
   dl.innerHTML = '';
   names.forEach(function(c){ dl.appendChild(el('option', {value: c})); });
 }
 
 function screenCard(s){
-  var id = String(s.id);
-  var d = el('div', {className: 'screen' + (current === id ? ' sel' : '')});
+  var d = el('div', {className: 'screen'});
+  var n = items.filter(function(i){ return i.active && matches(i, s); }).length;
   var top = el('div');
-  top.appendChild(el('b', {textContent: s.name}));
-  top.appendChild(el('span', {className: 'small', textContent: '  ' + count(id) + ' items'}));
-  top.onclick = function(){ current = id; renderScreens(); renderList(); };
+  var b = el('b', {textContent: s.name});
+  b.onclick = function(){ view = String(s.id); renderFilter(); renderList(); $('ptitle').scrollIntoView(); };
+  top.appendChild(b);
+  top.appendChild(el('span', {className: 'small', textContent: '  ' + n + ' playing'}));
   d.appendChild(top);
   var row = el('div', {className: 'row'});
   row.appendChild(btn('Rename', 'gray', function(){ rename(s); }));
@@ -160,10 +219,9 @@ async function addScreen(){
   var name = $('sname').value.trim();
   var cat = $('scat').value.trim() || 'General';
   if (!name){ say('Enter a screen name'); return; }
-  var r = await sb.from('screens').insert({name: name, category: cat}).select();
+  var r = await sb.from('screens').insert({name: name, category: cat});
   if (r.error){ say('Error: ' + r.error.message); return; }
   $('sname').value = '';
-  current = String(r.data[0].id);
   say('Screen added');
   loadAll();
 }
@@ -179,74 +237,138 @@ async function setCat(s){
   await sb.from('screens').update({category: c.trim()}).eq('id', s.id);
   loadAll();
 }
+async function renameCat(old){
+  var n = prompt('Category name', old);
+  if (!n || !n.trim() || n.trim() === old) return;
+  n = n.trim();
+  await sb.from('screens').update({category: n}).eq('category', old);
+  for (var i = 0; i < items.length; i++){
+    var t = items[i].targets || [];
+    if (t.indexOf('c:' + old) > -1){
+      var nt = t.map(function(x){ return x === 'c:' + old ? 'c:' + n : x; });
+      nt = nt.filter(function(x, k){ return nt.indexOf(x) === k; });
+      await sb.from('playlist').update({targets: nt}).eq('id', items[i].id);
+    }
+  }
+  loadAll();
+}
 function link(s){
   var url = location.href.split('admin.html')[0] + 'player.html?screen=' + s.id;
   prompt('Open this address on the TV:', url);
 }
 async function delScreen(s){
-  var id = String(s.id);
-  var its = items.filter(function(i){ return i.screen === id; });
-  if (!confirm('Delete "' + s.name + '" and its ' + its.length + ' items?')) return;
-  var paths = its.map(pathOf).filter(Boolean);
-  if (paths.length) await sb.storage.from('media').remove(paths);
-  await sb.from('playlist').delete().eq('screen', id);
+  if (!confirm('Delete screen "' + s.name + '"? Its media stays in the library.')) return;
+  var key = 's:' + s.id;
+  for (var i = 0; i < items.length; i++){
+    var t = items[i].targets || [];
+    if (t.indexOf(key) > -1){
+      await sb.from('playlist').update({targets: t.filter(function(x){ return x !== key; })}).eq('id', items[i].id);
+    }
+  }
   await sb.from('screens').delete().eq('id', s.id);
-  if (current === id) current = null;
   loadAll();
+}
+
+/* ---------- media list ---------- */
+function renderFilter(){
+  var f = $('view');
+  f.innerHTML = '';
+  f.appendChild(el('option', {value: 'all', textContent: 'All media'}));
+  f.appendChild(el('option', {value: 'none', textContent: 'Not shown anywhere'}));
+  screens.forEach(function(s){
+    f.appendChild(el('option', {value: String(s.id), textContent: 'Playing on: ' + s.name + ' (' + s.category + ')'}));
+  });
+  var ok = Array.prototype.some.call(f.options, function(o){ return o.value === view; });
+  if (!ok) view = 'all';
+  f.value = view;
+}
+function setView(v){ view = v; renderList(); }
+function visible(){
+  if (view === 'all') return items;
+  if (view === 'none') return items.filter(function(i){ return !whereText(i); });
+  var s = screens.filter(function(x){ return String(x.id) === view; })[0];
+  return s ? items.filter(function(i){ return matches(i, s); }) : items;
 }
 
 function renderList(){
   var box = $('list');
   box.innerHTML = '';
-  $('ptitle').textContent = 'Playlist: ' + nameOf(current);
-  var list = items.filter(function(i){ return i.screen === current; });
-  if (!list.length){ box.textContent = 'Nothing yet. Upload something above.'; return; }
+  var list = visible();
+  if (!list.length){ box.textContent = 'Nothing here.'; return; }
   list.forEach(function(it, i){
     var d = el('div', {className: 'card' + (it.active ? '' : ' off')});
     var t = el(it.file_type === 'video' ? 'video' : 'img', {className: 'thumb', src: it.file_url});
     if (it.file_type === 'video'){ t.muted = true; t.controls = true; t.preload = 'metadata'; }
     d.appendChild(t);
-    var row = el('div', {className: 'row'});
-    if (it.file_type === 'image'){
-      row.appendChild(document.createTextNode('Seconds: '));
-      row.appendChild(el('input', {type: 'number', min: 1, value: it.duration_seconds,
-        onchange: function(){ setDur(it, this.value); }}));
+    if (editId === it.id){
+      d.appendChild(el('div', {className: 'small', textContent: 'Show this on:'}));
+      d.appendChild(editPicker.el);
+      var r = el('div', {className: 'row'});
+      r.appendChild(btn('Save', '', function(){ saveWhere(it); }));
+      r.appendChild(btn('Cancel', 'gray', function(){ editId = null; renderList(); }));
+      d.appendChild(r);
     } else {
-      row.appendChild(document.createTextNode('Video (plays fully)'));
+      var w = whereText(it);
+      d.appendChild(el('div', {
+        className: 'where' + (w ? '' : ' warn'),
+        textContent: w ? 'Shown on: ' + w : '⚠ Not shown anywhere'
+      }));
+      var row = el('div', {className: 'row'});
+      if (it.file_type === 'image'){
+        row.appendChild(document.createTextNode('Seconds: '));
+        row.appendChild(el('input', {type: 'number', min: 1, value: it.duration_seconds,
+          onchange: function(){ setDur(it, this.value); }}));
+      } else {
+        row.appendChild(document.createTextNode('Video (plays fully)'));
+      }
+      row.appendChild(btn('↑', 'gray', function(){ move(list, i, -1); }));
+      row.appendChild(btn('↓', 'gray', function(){ move(list, i, 1); }));
+      row.appendChild(btn('Edit where', 'gray', function(){
+        editId = it.id; editPicker = makePicker(it.targets || []); renderList();
+      }));
+      row.appendChild(btn(it.active ? 'Hide' : 'Show', 'gray', function(){ toggle(it); }));
+      row.appendChild(btn('Delete', 'red', function(){ del(it); }));
+      d.appendChild(row);
     }
-    row.appendChild(btn('↑', 'gray', function(){ move(list, i, -1); }));
-    row.appendChild(btn('↓', 'gray', function(){ move(list, i, 1); }));
-    row.appendChild(btn(it.active ? 'Hide' : 'Show', 'gray', function(){ toggle(it); }));
-    row.appendChild(btn('Delete', 'red', function(){ del(it); }));
-    d.appendChild(row);
     box.appendChild(d);
   });
 }
 
+/* ---------- actions ---------- */
 async function upload(){
-  var f = $('file').files[0];
-  if (!f){ say('Choose a file first'); return; }
-  if (!current){ say('Add a screen first'); return; }
-  var type = f.type.indexOf('video') === 0 ? 'video' : 'image';
-  var path = Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  say('Uploading...');
-  var up = await sb.storage.from('media').upload(path, f);
-  if (up.error){ say('Error: ' + up.error.message); return; }
-  var url = sb.storage.from('media').getPublicUrl(path).data.publicUrl;
+  var files = $('file').files;
+  if (!files.length){ say('Choose a file first'); return; }
+  var targets = upPicker.get();
+  if (!targets.length){ say('Tick where it should play'); return; }
   var maxPos = items.reduce(function(m, x){ return Math.max(m, x.position); }, 0);
-  var ins = await sb.from('playlist').insert({
-    file_url: url,
-    file_type: type,
-    duration_seconds: parseInt($('newdur').value) || 8,
-    position: maxPos + 1,
-    screen: current
-  });
-  if (ins.error){ say('Error: ' + ins.error.message); return; }
+  for (var k = 0; k < files.length; k++){
+    var f = files[k];
+    var type = f.type.indexOf('video') === 0 ? 'video' : 'image';
+    var path = Date.now() + '_' + k + '_' + f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    say('Uploading ' + (k + 1) + ' of ' + files.length + '...');
+    var up = await sb.storage.from('media').upload(path, f);
+    if (up.error){ say('Error: ' + up.error.message); return; }
+    var url = sb.storage.from('media').getPublicUrl(path).data.publicUrl;
+    maxPos++;
+    var ins = await sb.from('playlist').insert({
+      file_url: url,
+      file_type: type,
+      duration_seconds: parseInt($('newdur').value) || 8,
+      position: maxPos,
+      targets: targets
+    });
+    if (ins.error){ say('Error: ' + ins.error.message); return; }
+  }
   $('file').value = '';
-  say('Uploaded to ' + nameOf(current));
+  say('Uploaded!');
   loadAll();
 }
-
+async function saveWhere(it){
+  var r = await sb.from('playlist').update({targets: editPicker.get()}).eq('id', it.id);
+  if (r.error){ say('Error: ' + r.error.message); return; }
+  editId = null;
+  loadAll();
+}
 async function setDur(it, v){
   await sb.from('playlist').update({duration_seconds: parseInt(v) || 8}).eq('id', it.id);
   loadAll();
@@ -263,7 +385,7 @@ async function move(list, i, dir){
   loadAll();
 }
 async function del(it){
-  if (!confirm('Delete this item?')) return;
+  if (!confirm('Delete this item everywhere?')) return;
   var p = pathOf(it);
   if (p) await sb.storage.from('media').remove([p]);
   await sb.from('playlist').delete().eq('id', it.id);
