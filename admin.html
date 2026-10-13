@@ -11,11 +11,16 @@ input{background:#222;color:#eee;width:100%;box-sizing:border-box}
 button{background:#2d7ff9;color:#fff}
 button.gray{background:#444}
 button.red{background:#c0392b}
+h2,h3{margin:12px 0 6px}
+h4{margin:14px 0 4px;color:#9ab;font-size:13px;text-transform:uppercase;letter-spacing:1px}
+.screen{background:#1c1c1c;border-radius:10px;padding:10px;margin:6px 0;border:2px solid transparent}
+.screen.sel{border-color:#2d7ff9}
 .card{background:#1c1c1c;border-radius:10px;padding:10px;margin:10px 0}
 .card.off{opacity:.45}
 .thumb{width:100%;max-height:160px;object-fit:contain;background:#000;border-radius:6px}
 .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}
 .row input{width:80px;padding:6px}
+.small{font-size:13px;color:#999}
 #status{color:#9c9;margin:8px 0}
 #loginerr{color:#e88}
 .hidden{display:none}
@@ -34,12 +39,22 @@ button.red{background:#c0392b}
 
 <div id="app" class="hidden">
   <button class="gray" onclick="logout()">Log out</button>
-  <h3>Upload</h3>
+
+  <h3>Screens</h3>
+  <div class="small">Tap a screen to edit its playlist.</div>
+  <div id="screens"></div>
+
+  <h4>Add screen</h4>
+  <input id="sname" placeholder="Screen name (e.g. Counter left)">
+  <input id="scat" list="cats" placeholder="Category (e.g. Counter)">
+  <datalist id="cats"></datalist>
+  <button onclick="addScreen()">Add screen</button>
+
+  <h3 id="ptitle">Playlist</h3>
   <input id="file" type="file" accept="image/*,video/*">
   <div>Image seconds: <input id="newdur" type="number" value="8" min="1" style="width:80px"></div>
   <button onclick="upload()">Upload</button>
   <div id="status"></div>
-  <h3>Playlist</h3>
   <div id="list"></div>
 </div>
 
@@ -47,10 +62,20 @@ button.red{background:#c0392b}
 var SUPABASE_URL = 'https://voqbltomtzpvuirtpjdq.supabase.co';
 var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZvcWJsdG9tdHpwdnVpcnRwamRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4ODUwNTQsImV4cCI6MjEwNzQ2MTA1NH0.A6n1OjCKtKC5GSykLLc0J9DMSSO1R1PZ3WgfKTpKj_0';
 var sb = supabase.createClient(SUPABASE_URL, KEY);
-var items = [];
+var screens = [], items = [], current = null;
 
 function $(id){ return document.getElementById(id); }
 function say(t){ $('status').textContent = t; }
+function el(tag, props){
+  var e = document.createElement(tag);
+  for (var k in props) e[k] = props[k];
+  return e;
+}
+function btn(text, cls, fn){ return el('button', {textContent: text, className: cls, onclick: fn}); }
+function pathOf(it){
+  var p = it.file_url.split('/media/')[1];
+  return p ? decodeURIComponent(p) : null;
+}
 
 async function init(){
   var r = await sb.auth.getSession();
@@ -59,7 +84,7 @@ async function init(){
 function show(on){
   $('login').classList.toggle('hidden', on);
   $('app').classList.toggle('hidden', !on);
-  if (on) loadItems();
+  if (on) loadAll();
 }
 async function login(){
   var r = await sb.auth.signInWithPassword({email:$('email').value, password:$('pass').value});
@@ -69,38 +94,130 @@ async function login(){
 }
 async function logout(){ await sb.auth.signOut(); show(false); }
 
-async function loadItems(){
-  var r = await sb.from('playlist').select('*').order('position',{ascending:true});
-  if (r.error){ say(r.error.message); return; }
-  items = r.data;
-  render();
+async function loadAll(){
+  var s = await sb.from('screens').select('*').order('name');
+  if (s.error){ say(s.error.message); return; }
+  screens = s.data;
+  var p = await sb.from('playlist').select('*').order('position', {ascending:true});
+  if (p.error){ say(p.error.message); return; }
+  items = p.data;
+  var ok = current === 'all' || screens.some(function(x){ return String(x.id) === current; });
+  if (!ok) current = screens.length ? String(screens[0].id) : 'all';
+  renderScreens();
+  renderList();
 }
 
-function render(){
+function count(id){
+  return items.filter(function(i){ return i.screen === id; }).length;
+}
+function nameOf(id){
+  if (id === 'all') return 'Shared (all screens)';
+  var s = screens.filter(function(x){ return String(x.id) === id; })[0];
+  return s ? s.name : '';
+}
+
+function renderScreens(){
+  var box = $('screens');
+  box.innerHTML = '';
+  var cats = {};
+  screens.forEach(function(s){
+    (cats[s.category] = cats[s.category] || []).push(s);
+  });
+  var names = Object.keys(cats).sort();
+  names.forEach(function(c){
+    box.appendChild(el('h4', {textContent: c}));
+    cats[c].forEach(function(s){ box.appendChild(screenCard(s)); });
+  });
+  box.appendChild(el('h4', {textContent: 'Shared'}));
+  var d = el('div', {className: 'screen' + (current === 'all' ? ' sel' : '')});
+  var top = el('div', {textContent: 'Shared - plays on all screens (' + count('all') + ' items)'});
+  top.onclick = function(){ current = 'all'; renderScreens(); renderList(); };
+  d.appendChild(top);
+  box.appendChild(d);
+  var dl = $('cats');
+  dl.innerHTML = '';
+  names.forEach(function(c){ dl.appendChild(el('option', {value: c})); });
+}
+
+function screenCard(s){
+  var id = String(s.id);
+  var d = el('div', {className: 'screen' + (current === id ? ' sel' : '')});
+  var top = el('div');
+  top.appendChild(el('b', {textContent: s.name}));
+  top.appendChild(el('span', {className: 'small', textContent: '  ' + count(id) + ' items'}));
+  top.onclick = function(){ current = id; renderScreens(); renderList(); };
+  d.appendChild(top);
+  var row = el('div', {className: 'row'});
+  row.appendChild(btn('Rename', 'gray', function(){ rename(s); }));
+  row.appendChild(btn('Category', 'gray', function(){ setCat(s); }));
+  row.appendChild(btn('TV link', 'gray', function(){ link(s); }));
+  row.appendChild(btn('Delete', 'red', function(){ delScreen(s); }));
+  d.appendChild(row);
+  return d;
+}
+
+async function addScreen(){
+  var name = $('sname').value.trim();
+  var cat = $('scat').value.trim() || 'General';
+  if (!name){ say('Enter a screen name'); return; }
+  var r = await sb.from('screens').insert({name: name, category: cat}).select();
+  if (r.error){ say('Error: ' + r.error.message); return; }
+  $('sname').value = '';
+  current = String(r.data[0].id);
+  say('Screen added');
+  loadAll();
+}
+async function rename(s){
+  var n = prompt('Screen name', s.name);
+  if (!n || !n.trim()) return;
+  await sb.from('screens').update({name: n.trim()}).eq('id', s.id);
+  loadAll();
+}
+async function setCat(s){
+  var c = prompt('Category', s.category);
+  if (!c || !c.trim()) return;
+  await sb.from('screens').update({category: c.trim()}).eq('id', s.id);
+  loadAll();
+}
+function link(s){
+  var url = location.href.split('admin.html')[0] + 'player.html?screen=' + s.id;
+  prompt('Open this address on the TV:', url);
+}
+async function delScreen(s){
+  var id = String(s.id);
+  var its = items.filter(function(i){ return i.screen === id; });
+  if (!confirm('Delete "' + s.name + '" and its ' + its.length + ' items?')) return;
+  var paths = its.map(pathOf).filter(Boolean);
+  if (paths.length) await sb.storage.from('media').remove(paths);
+  await sb.from('playlist').delete().eq('screen', id);
+  await sb.from('screens').delete().eq('id', s.id);
+  if (current === id) current = null;
+  loadAll();
+}
+
+function renderList(){
   var box = $('list');
   box.innerHTML = '';
-  if (!items.length){ box.textContent = 'Nothing yet. Upload something above.'; return; }
-  items.forEach(function(it, i){
-    var d = document.createElement('div');
-    d.className = 'card' + (it.active ? '' : ' off');
-    var t = document.createElement(it.file_type === 'video' ? 'video' : 'img');
-    t.className = 'thumb';
-    t.src = it.file_url;
+  $('ptitle').textContent = 'Playlist: ' + nameOf(current);
+  var list = items.filter(function(i){ return i.screen === current; });
+  if (!list.length){ box.textContent = 'Nothing yet. Upload something above.'; return; }
+  list.forEach(function(it, i){
+    var d = el('div', {className: 'card' + (it.active ? '' : ' off')});
+    var t = el(it.file_type === 'video' ? 'video' : 'img', {className: 'thumb', src: it.file_url});
     if (it.file_type === 'video'){ t.muted = true; t.controls = true; t.preload = 'metadata'; }
     d.appendChild(t);
-    var row = document.createElement('div');
-    row.className = 'row';
-    var h = '';
+    var row = el('div', {className: 'row'});
     if (it.file_type === 'image'){
-      h += 'Seconds: <input type="number" min="1" value="' + it.duration_seconds + '" onchange="setDur(' + i + ',this.value)">';
+      row.appendChild(document.createTextNode('Seconds: '));
+      row.appendChild(el('input', {type: 'number', min: 1, value: it.duration_seconds,
+        onchange: function(){ setDur(it, this.value); }}));
     } else {
-      h += 'Video (plays fully)';
+      row.appendChild(document.createTextNode('Video (plays fully)'));
     }
-    h += '<button class="gray" onclick="move(' + i + ',-1)">&uarr;</button>';
-    h += '<button class="gray" onclick="move(' + i + ',1)">&darr;</button>';
-    h += '<button class="gray" onclick="toggle(' + i + ')">' + (it.active ? 'Hide' : 'Show') + '</button>';
-    h += '<button class="red" onclick="del(' + i + ')">Delete</button>';
-    row.innerHTML = h;
+    row.appendChild(btn('↑', 'gray', function(){ move(list, i, -1); }));
+    row.appendChild(btn('↓', 'gray', function(){ move(list, i, 1); }));
+    row.appendChild(btn(it.active ? 'Hide' : 'Show', 'gray', function(){ toggle(it); }));
+    row.appendChild(btn('Delete', 'red', function(){ del(it); }));
     d.appendChild(row);
     box.appendChild(d);
   });
@@ -109,6 +226,7 @@ function render(){
 async function upload(){
   var f = $('file').files[0];
   if (!f){ say('Choose a file first'); return; }
+  if (!current){ say('Add a screen first'); return; }
   var type = f.type.indexOf('video') === 0 ? 'video' : 'image';
   var path = Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   say('Uploading...');
@@ -120,36 +238,36 @@ async function upload(){
     file_url: url,
     file_type: type,
     duration_seconds: parseInt($('newdur').value) || 8,
-    position: maxPos + 1
+    position: maxPos + 1,
+    screen: current
   });
   if (ins.error){ say('Error: ' + ins.error.message); return; }
   $('file').value = '';
-  say('Uploaded!');
-  loadItems();
+  say('Uploaded to ' + nameOf(current));
+  loadAll();
 }
 
-async function setDur(i, v){
-  await sb.from('playlist').update({duration_seconds: parseInt(v) || 8}).eq('id', items[i].id);
-  loadItems();
+async function setDur(it, v){
+  await sb.from('playlist').update({duration_seconds: parseInt(v) || 8}).eq('id', it.id);
+  loadAll();
 }
-async function toggle(i){
-  await sb.from('playlist').update({active: !items[i].active}).eq('id', items[i].id);
-  loadItems();
+async function toggle(it){
+  await sb.from('playlist').update({active: !it.active}).eq('id', it.id);
+  loadAll();
 }
-async function move(i, dir){
-  var a = items[i], b = items[i + dir];
+async function move(list, i, dir){
+  var a = list[i], b = list[i + dir];
   if (!b) return;
   await sb.from('playlist').update({position: b.position}).eq('id', a.id);
   await sb.from('playlist').update({position: a.position}).eq('id', b.id);
-  loadItems();
+  loadAll();
 }
-async function del(i){
-  var it = items[i];
+async function del(it){
   if (!confirm('Delete this item?')) return;
-  var part = it.file_url.split('/media/')[1];
-  if (part) await sb.storage.from('media').remove([decodeURIComponent(part)]);
+  var p = pathOf(it);
+  if (p) await sb.storage.from('media').remove([p]);
   await sb.from('playlist').delete().eq('id', it.id);
-  loadItems();
+  loadAll();
 }
 
 init();
